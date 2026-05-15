@@ -3,11 +3,42 @@ const fs = require('fs');
 const sqlite3 = require('sqlite3').verbose();
 const { promisify } = require('util');
 
-const DB_PATH = path.join(__dirname, 'data', 'kasa.sqlite3');
+const FILE_DB_SRC = path.join(__dirname, 'data', 'kasa.sqlite3');
+// On serverless platforms like Vercel the project filesystem is read-only at runtime.
+// Use a writable runtime path (e.g. /tmp) when available and copy the bundled DB there.
+let DB_PATH = FILE_DB_SRC;
+try {
+  const useTmp = Boolean(process.env.VERCEL) || process.env.USE_WRITABLE_SQLITE === '1' || process.env.NODE_ENV === 'production';
+  if (useTmp) {
+    const tmpPath = path.join('/tmp', 'kasa.sqlite3');
+    // If source DB exists and tmp doesn't, copy it so we can write to it.
+    if (fs.existsSync(FILE_DB_SRC) && !fs.existsSync(tmpPath)) {
+      try {
+        fs.copyFileSync(FILE_DB_SRC, tmpPath);
+        // ensure perms are writable
+        try { fs.chmodSync(tmpPath, 0o644); } catch (e) { /* ignore */ }
+      } catch (e) {
+        // copy may fail on some environments; fall back to source path
+        // we'll leave DB_PATH pointing to source which may be read-only.
+      }
+    }
+    DB_PATH = fs.existsSync(tmpPath) ? tmpPath : FILE_DB_SRC;
+  }
+} catch (e) {
+  // ignore and keep FILE_DB_SRC as DB_PATH
+  DB_PATH = FILE_DB_SRC;
+}
 const PROPS_JSON_PATH = path.join(__dirname, 'data', 'properties.json');
 
 function openDb() {
-  const db = new sqlite3.Database(DB_PATH);
+  // Open DB in readwrite/create mode and set a busyTimeout for concurrent access.
+  const db = new sqlite3.Database(DB_PATH, sqlite3.OPEN_READWRITE | sqlite3.OPEN_CREATE, (err) => {
+    if (err) {
+      // Log error but allow caller to handle it
+      console.error('Failed to open sqlite database at', DB_PATH, err && err.message);
+    }
+  });
+  try { db.configure && db.configure('busyTimeout', 5000); } catch (e) { /* ignore */ }
   // Promisify helpers
   db.runAsync = function (sql, params = []) {
     return new Promise((resolve, reject) => {
