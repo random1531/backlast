@@ -14,18 +14,34 @@ const app = express();
 
 app.use(logger('dev'));
 // Enable CORS for frontend. Configure with FRONTEND_ORIGINS (CSV) or FRONTEND_ORIGIN env var.
-// Example: FRONTEND_ORIGINS="https://p5opc-xvcz.vercel.app,http://localhost:3000"
+// Examples:
+// FRONTEND_ORIGINS="https://p5opc-xvcz.vercel.app,http://localhost:3000"
+// or to allow any vercel.app subdomain: FRONTEND_ORIGINS="vercel.app"
 const rawOrigins = process.env.FRONTEND_ORIGINS || process.env.FRONTEND_ORIGIN || 'http://localhost:3000';
 const FRONTEND_ORIGINS = rawOrigins.split(',').map((s) => s.trim()).filter(Boolean);
+
+// For debugging, list what we accepted as configured origins/patterns
+console.log('CORS allowed origins/patterns:', FRONTEND_ORIGINS);
 
 // Use a dynamic origin function so we return an explicit origin when credentials=true.
 app.use(cors({
   origin: function (origin, callback) {
     // Allow non-browser requests or same-origin requests (no origin)
     if (!origin) return callback(null, true);
-    if (FRONTEND_ORIGINS.indexOf(origin) !== -1) {
-      return callback(null, true);
+
+    // Exact match (including protocol)
+    if (FRONTEND_ORIGINS.indexOf(origin) !== -1) return callback(null, true);
+
+    // Also allow by hostname suffix: if configured value is 'vercel.app' or '.vercel.app' or '*.vercel.app'
+    const originHost = origin.replace(/^https?:\/\//, '');
+    for (const allowed of FRONTEND_ORIGINS) {
+      // remove protocol if present
+      const normalized = allowed.replace(/^https?:\/\//, '').replace(/^\*\./, '').replace(/^\./, '');
+      if (!normalized) continue;
+      if (originHost === normalized) return callback(null, true);
+      if (originHost.endsWith('.' + normalized)) return callback(null, true);
     }
+
     return callback(new Error('CORS policy: origin not allowed'), false);
   },
   credentials: true,
